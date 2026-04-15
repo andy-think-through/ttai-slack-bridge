@@ -1,0 +1,13 @@
+{
+  "name": "ttai-slack-bridge",
+  "version": "1.0.0",
+  "description": "Routes Andy's Slack replies to the correct TTAI employee routine via Claude Code API triggers",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@slack/bolt": "^4.1.0",
+    "dotenv": "^16.4.0"
+  }
+}
