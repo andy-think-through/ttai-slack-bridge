@@ -2,7 +2,6 @@ const { App } = require("@slack/bolt");
 require("dotenv").config();
 
 // --- Config ---
-
 const ANDY_USER_ID = process.env.ANDY_USER_ID;
 const CHANNEL_ID = process.env.CHANNEL_ID;
 
@@ -25,7 +24,6 @@ const employees = {
 };
 
 // --- Slack app (Socket Mode -- no public URL needed) ---
-
 const app = new App({
   token: process.env.SLACK_BOT_TOKEN,
   appToken: process.env.SLACK_APP_TOKEN,
@@ -33,6 +31,13 @@ const app = new App({
 });
 
 // --- Routing logic ---
+
+// Agent reports start with "NAME --" (e.g. "WIKI --", "FRED --", "MARK-LITE --").
+// The Routines-side agents post back to Slack using Andy's user OAuth token, so
+// their messages pass the `message.user === ANDY_USER_ID` filter below. Without
+// this guard the bridge re-fires each agent on its own reports (Wiki looped ~14
+// times on 2026-04-16 for exactly this reason).
+const AGENT_REPORT_PATTERN = /^(wiki|fred|mark-?lite)\s*--/i;
 
 // Try to identify which employee a message is for.
 // Priority 1: message starts with employee name ("Wiki, what's the status?")
@@ -78,18 +83,24 @@ async function getThreadParentText(channel, threadTs) {
   return "";
 }
 
-// --- Fire the routine ---
+// Redact the trigger ID in URLs for log safety (keep the prefix for debugging,
+// hide the rest). Example: .../routines/trig_01AB…/fire
+function redactFireUrl(url) {
+  if (!url) return "<unset>";
+  return url.replace(/(trig_[A-Za-z0-9]{4})[A-Za-z0-9]+/, "$1…");
+}
 
+// --- Fire the routine ---
 async function fireRoutine(employeeName, messageText) {
   const employee = employees[employeeName];
-
   if (!employee || !employee.fireUrl || !employee.token) {
     console.log(`Skipping ${employeeName} -- no URL or token configured`);
     return null;
   }
-
-  console.log(`Firing ${employeeName} routine with: "${messageText.substring(0, 80)}..."`);
-
+  const redactedUrl = redactFireUrl(employee.fireUrl);
+  console.log(
+    `Firing ${employeeName} -> ${redactedUrl} with: "${messageText.substring(0, 80)}..."`
+  );
   try {
     const response = await fetch(employee.fireUrl, {
       method: "POST",
@@ -102,23 +113,34 @@ async function fireRoutine(employeeName, messageText) {
       body: JSON.stringify({ text: messageText }),
     });
 
-    const data = await response.json();
+    // Log non-2xx loudly -- silent 404s from a wrong FIRE_URL have bitten us.
+    if (!response.ok) {
+      const bodyText = await response.text().catch(() => "<unreadable body>");
+      console.error(
+        `Fire failed for ${employeeName}: HTTP ${response.status} ${response.statusText} ` +
+          `from ${redactedUrl} -- body: ${bodyText.substring(0, 500)}`
+      );
+      return null;
+    }
 
+    const data = await response.json();
     if (data.claude_code_session_url) {
       console.log(`Session started: ${data.claude_code_session_url}`);
       return data;
     } else {
-      console.error(`Unexpected response from ${employeeName}:`, data);
+      console.error(
+        `Unexpected response from ${employeeName} (HTTP ${response.status}):`,
+        data
+      );
       return null;
     }
   } catch (err) {
-    console.error(`Failed to fire ${employeeName}:`, err.message);
+    console.error(`Failed to fire ${employeeName} (${redactedUrl}):`, err.message);
     return null;
   }
 }
 
 // --- Message listener ---
-
 app.message(async ({ message }) => {
   // Only process messages in #ttai-employees
   if (message.channel !== CHANNEL_ID) return;
@@ -130,6 +152,17 @@ app.message(async ({ message }) => {
   if (message.subtype) return;
 
   const text = message.text || "";
+
+  // Skip agent reports (e.g. "WIKI -- 2026-04-16 Scan ..."). Agents post as
+  // Andy, so the user-ID filter above doesn't exclude them; without this guard
+  // Wiki loops on its own reports.
+  if (AGENT_REPORT_PATTERN.test(text.trim())) {
+    console.log(
+      `Ignoring agent report (self-post loop guard): "${text.substring(0, 60)}..."`
+    );
+    return;
+  }
+
   console.log(`\nAndy said: "${text}"`);
 
   // Priority 1: message explicitly names an employee
@@ -146,7 +179,9 @@ app.message(async ({ message }) => {
 
   if (!target) {
     console.log("Could not identify target employee. Message ignored.");
-    console.log('Tip: start with "Wiki," "Fred," or "Mark-Lite," or reply in an employee\'s thread.');
+    console.log(
+      'Tip: start with "Wiki," "Fred," or "Mark-Lite," or reply in an employee\'s thread.'
+    );
     return;
   }
 
@@ -168,16 +203,17 @@ app.message(async ({ message }) => {
 });
 
 // --- Start ---
-
 (async () => {
   await app.start();
   console.log("TTAI Slack Bridge is running");
   console.log(`Watching channel: ${CHANNEL_ID}`);
   console.log(`Routing messages from: ${ANDY_USER_ID}`);
   console.log(
-    `Employees configured: ${Object.entries(employees)
-      .filter(([, e]) => e.fireUrl && e.token)
-      .map(([name]) => name)
-      .join(", ") || "none yet"}`
+    `Employees configured: ${
+      Object.entries(employees)
+        .filter(([, e]) => e.fireUrl && e.token)
+        .map(([name]) => name)
+        .join(", ") || "none yet"
+    }`
   );
 })();
