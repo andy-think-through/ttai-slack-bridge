@@ -21,6 +21,11 @@ const employees = {
     token: process.env.MARKLITE_TOKEN,
     patterns: ["mark-lite", "marklite", "mark lite"],
   },
+  cord: {
+    fireUrl: process.env.CORD_FIRE_URL,
+    token: process.env.CORD_TOKEN,
+    patterns: ["cord"],
+  },
 };
 
 // --- Slack app (Socket Mode -- no public URL needed) ---
@@ -37,7 +42,7 @@ const app = new App({
 // their messages pass the `message.user === ANDY_USER_ID` filter below. Without
 // this guard the bridge re-fires each agent on its own reports (Wiki looped ~14
 // times on 2026-04-16 for exactly this reason).
-const AGENT_REPORT_PATTERN = /^(wiki|fred|mark-?lite)\s*--/i;
+const AGENT_REPORT_PATTERN = /^(wiki|fred|mark-?lite|cord)\s*--/i;
 
 // Try to identify which employee a message is for.
 // Priority 1: message starts with employee name ("Wiki, what's the status?")
@@ -61,6 +66,7 @@ function identifyEmployeeFromReport(text) {
   if (lower.startsWith("wiki")) return "wiki";
   if (lower.startsWith("fred")) return "fred";
   if (lower.startsWith("mark-lite") || lower.startsWith("marklite")) return "marklite";
+  if (lower.startsWith("cord")) return "cord";
   // Also check for "Mercia Flooring --" style responses from wiki
   if (lower.includes("wiki entry") || lower.includes("wiki updated")) return "wiki";
   return null;
@@ -84,10 +90,10 @@ async function getThreadParentText(channel, threadTs) {
 }
 
 // Redact the trigger ID in URLs for log safety (keep the prefix for debugging,
-// hide the rest). Example: .../routines/trig_01AB…/fire
+// hide the rest). Example: .../routines/trig_01ABâ¦/fire
 function redactFireUrl(url) {
   if (!url) return "<unset>";
-  return url.replace(/(trig_[A-Za-z0-9]{4})[A-Za-z0-9]+/, "$1…");
+  return url.replace(/(trig_[A-Za-z0-9]{4})[A-Za-z0-9]+/, "$1â¦");
 }
 
 // --- Fire the routine ---
@@ -180,7 +186,7 @@ app.message(async ({ message }) => {
   if (!target) {
     console.log("Could not identify target employee. Message ignored.");
     console.log(
-      'Tip: start with "Wiki," "Fred," or "Mark-Lite," or reply in an employee\'s thread.'
+      'Tip: start with "Wiki," "Fred," "Mark-Lite," or "Cord," or reply in an employee\'s thread.'
     );
     return;
   }
